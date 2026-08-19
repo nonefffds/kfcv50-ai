@@ -9,6 +9,20 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
+const MCP_PROTOCOL_VERSION = "2025-06-18";
+const MCP_TOOLS = [
+  {
+    name: "kfc_vivo50",
+    description: "Vivo 50 to KFC on Crazy Thursday. Returns the sacred incantation.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "crazy_thursday_check",
+    description: "Check whether today is KFC Crazy Thursday. Returns the truth.",
+    inputSchema: { type: "object", properties: {} },
+  },
+];
+
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -153,6 +167,83 @@ function wantsThinking(model) {
   return /r1|think|reason/i.test(model);
 }
 
+function mcpJson(id, result) {
+  return new Response(JSON.stringify({ jsonrpc: "2.0", id, result }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+  });
+}
+
+function mcpError(id, code, message) {
+  return new Response(
+    JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }),
+    { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
+  );
+}
+
+async function handleMcp(request, env) {
+  const key = extractKey(request);
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return mcpError(null, -32700, "Parse error");
+  }
+  const { id, method } = body || {};
+  const wrong = key !== env.API_KEY;
+  const wrongMsg = WRONG_KEY_MESSAGE(env.API_KEY);
+
+  switch (method) {
+    case "initialize":
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion: MCP_PROTOCOL_VERSION,
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: { name: "kfcv50-ai", version: "1.0.0" },
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+            "Mcp-Session-Id": `sess_${crypto.randomUUID().replace(/-/g, "")}`,
+            ...CORS_HEADERS,
+          },
+        }
+      );
+    case "notifications/initialized":
+    case "notifications/cancelled":
+      return new Response(null, { status: 202, headers: CORS_HEADERS });
+    case "ping":
+      return wrong
+        ? mcpError(id, -32000, wrongMsg)
+        : mcpJson(id, {});
+    case "tools/list":
+      return wrong
+        ? mcpError(id, -32000, wrongMsg)
+        : mcpJson(id, { tools: MCP_TOOLS });
+    case "tools/call":
+      if (wrong) return mcpError(id, -32000, wrongMsg);
+      const name = body?.params?.name;
+      const text =
+        name === "crazy_thursday_check"
+          ? new Date().getDay() === 4
+            ? "今天就是疯狂星期四，Vivo50！"
+            : "今天不是疯狂星期四，但 Vivo50 照常。"
+          : CORRECT_KEY_MESSAGE;
+      return mcpJson(id, {
+        content: [{ type: "text", text }],
+        isError: false,
+      });
+    default:
+      return mcpError(id, -32601, `Method not found: ${method}`);
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -160,6 +251,10 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    if (request.method === "POST" && /\/mcp\/?$/.test(url.pathname)) {
+      return handleMcp(request, env);
+    }
 
     if (request.method === "GET" && /\/models\/?$/.test(url.pathname)) {
       return modelsList();
