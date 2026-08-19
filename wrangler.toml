@@ -1,0 +1,10 @@
+name = "kfcv50-ai"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+API_KEY = "sk-KFCcrazyDaY4Vme50now"
+
+[[routes]]
+pattern = "kfc-ai.mpam-lab.xyz"
+custom_domain = true
